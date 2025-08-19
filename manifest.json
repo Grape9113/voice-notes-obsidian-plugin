@@ -1,0 +1,10 @@
+{
+  "id": "voice-notes",
+  "name": "Voice Notes",
+  "version": "0.0.1",
+  "minAppVersion": "0.15.0",
+  "description": "Record and transcribe voice into Obsidian notes",
+  "author": "Grape9113",
+  "authorUrl": "",
+  "isDesktopOnly": true
+}

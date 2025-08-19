@@ -24,6 +24,8 @@ export default class VoiceNotesPlugin extends Plugin {
 
 	private ribbonEl: HTMLElement | null = null;
 
+    // No session secrets needed; HTTPS ensures encryption in transit
+
 	constructor(app: App, manifest: PluginManifest) {
 		super(app, manifest);
 	}
@@ -34,6 +36,8 @@ export default class VoiceNotesPlugin extends Plugin {
 		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
 
 		this.addSettingTab(new VoiceNotesSettingTab(this.app, this));
+
+        // Nothing else needed here
 
 		this.ribbonEl = this.addRibbonIcon(
 			"mic",
@@ -328,6 +332,8 @@ export default class VoiceNotesPlugin extends Plugin {
 		}
 	}
 
+    // No local encryption helpers needed
+
 	private async saveMarkdownNote(content: string) {
 		const filename = this.generateNoteFilename();
 		const existing = this.app.vault.getAbstractFileByPath(filename);
@@ -372,15 +378,16 @@ class VoiceNotesSettingTab extends PluginSettingTab {
 
 		containerEl.createEl("h2", { text: "Voice Notes Settings" });
 
+
 		new Setting(containerEl)
 			.setName("OpenAI API Key")
-			.setDesc("Stored locally. Used for Whisper and GPT-5 calls.")
+			.setDesc("Stored locally. Used for Whisper and GPT calls over HTTPS.")
 			.addText((text) =>
 				text
 					.setPlaceholder("sk-...")
 					.setValue(this.plugin.settings.apiKey)
 					.onChange(async (value) => {
-						this.plugin.settings.apiKey = value.trim();
+						this.plugin.settings.apiKey = (value || '').trim();
 						await this.plugin.saveSettings();
 					})
 			);

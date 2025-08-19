@@ -6,3 +6,41 @@ available in the app when your plugin is enabled.
 If your plugin does not need CSS, delete this file.
 
 */
+
+.voice-notes-ribbon {
+	position: relative;
+}
+
+.voice-notes-ribbon.vn-recording {
+	color: var(--color-red) !important;
+}
+
+.voice-notes-ribbon.vn-transcribing,
+.voice-notes-ribbon.vn-summarizing,
+.voice-notes-ribbon.vn-creating {
+	color: var(--color-yellow) !important;
+	animation: vn-pulse 1.2s ease-in-out infinite;
+}
+
+.voice-notes-ribbon.vn-success {
+	color: var(--color-green) !important;
+}
+
+.voice-notes-ribbon.vn-error {
+	color: var(--color-red) !important;
+	animation: vn-shake 300ms ease-in-out 2;
+}
+
+@keyframes vn-pulse {
+	0% { transform: scale(1); }
+	50% { transform: scale(1.12); }
+	100% { transform: scale(1); }
+}
+
+@keyframes vn-shake {
+	0% { transform: translateX(0); }
+	25% { transform: translateX(-2px); }
+	50% { transform: translateX(2px); }
+	75% { transform: translateX(-2px); }
+	100% { transform: translateX(0); }
+}

@@ -52,6 +52,12 @@ export default class VoiceNotesPlugin extends Plugin {
 			}
 		);
 
+		// Prepare ribbon status styling
+		if (this.ribbonEl) {
+			this.ribbonEl.addClass("voice-notes-ribbon");
+			this.setStage("idle");
+		}
+
 		this.addCommand({
 			id: "voice-notes-toggle-recording",
 			name: "Voice Notes: Toggle Recording",
@@ -142,6 +148,7 @@ export default class VoiceNotesPlugin extends Plugin {
 
 		this.mediaRecorder.start();
 		this.setRecordingUIState(true);
+		this.setStage("recording");
 		new Notice("Voice Notes: Recording started. Click again to stop.");
 	}
 
@@ -159,23 +166,32 @@ export default class VoiceNotesPlugin extends Plugin {
 		}
 
 		try {
+			this.setStage("transcribing");
 			new Notice("Voice Notes: Transcribing...");
 			const transcript = await this.transcribeWithWhisper(audioBlob);
 			if (!transcript || !transcript.trim()) {
 				new Notice("Voice Notes: Empty transcription.");
+				this.setStage("error");
+				this.deferIdle();
 				return;
 			}
 
+			this.setStage("summarizing");
 			new Notice("Voice Notes: Summarizing...");
 			const summary = await this.summarizeText(transcript);
+			this.setStage("creating");
 			new Notice("Voice Notes: Creating note...");
 			const noteContent = await this.createNoteFromSummary(summary);
 
 			await this.saveMarkdownNote(noteContent);
 			new Notice("Voice Notes: Note saved to vault.");
+			this.setStage("success");
+			this.deferIdle();
 		} catch (error) {
 			console.error("Voice Notes processing error", error);
 			new Notice("Voice Notes: Failed to process audio. See console.");
+			this.setStage("error");
+			this.deferIdle();
 		}
 	}
 
@@ -215,6 +231,29 @@ export default class VoiceNotesPlugin extends Plugin {
 		if (mimeType.includes("wav")) return "wav";
 		if (mimeType.includes("mp3")) return "mp3";
 		return "webm";
+	}
+
+	private setStage(stage: "idle" | "recording" | "transcribing" | "summarizing" | "creating" | "success" | "error") {
+		if (!this.ribbonEl) return;
+		const stages = ["idle", "recording", "transcribing", "summarizing", "creating", "success", "error"] as const;
+		for (const s of stages) this.ribbonEl.removeClass(`vn-${s}`);
+		this.ribbonEl.addClass(`vn-${stage}`);
+		const labelByStage: Record<string, string> = {
+			idle: "Voice Notes: Start Recording",
+			recording: "Voice Notes: Recording... Click to stop",
+			transcribing: "Voice Notes: Transcribing...",
+			summarizing: "Voice Notes: Summarizing...",
+			creating: "Voice Notes: Creating note...",
+			success: "Voice Notes: Done",
+			error: "Voice Notes: Error",
+		};
+		this.ribbonEl.setAttr("aria-label", labelByStage[stage] || "Voice Notes");
+	}
+
+	private deferIdle(timeoutMs: number = 1500) {
+		window.setTimeout(() => {
+			if (!this.isRecording) this.setStage("idle");
+		}, timeoutMs);
 	}
 
 	private async summarizeText(transcript: string): Promise<string> {

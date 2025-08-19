@@ -9,7 +9,7 @@ interface VoiceNotesSettings {
 
 const DEFAULT_SETTINGS: VoiceNotesSettings = {
 	apiKey: "",
-	whisperModel: "whisper-1",
+	whisperModel: "gpt-4o-transcribe",
 	summaryModel: "gpt-5-nano",
 	noteModel: "gpt-5"
 };
@@ -208,7 +208,7 @@ export default class VoiceNotesPlugin extends Plugin {
 		} catch (_) {
 			formData.append("file", audioBlob, `voice-note.${extension}`);
 		}
-		formData.append("model", this.settings.whisperModel || "whisper-1");
+		formData.append("model", this.settings.whisperModel || "gpt-4o-transcribe");
 		formData.append("response_format", "text");
 
 		const response = await this.fetchWithRetry("https://api.openai.com/v1/audio/transcriptions", {
@@ -397,6 +397,7 @@ class VoiceNotesSettingTab extends PluginSettingTab {
 			.setDesc("Model for transcription.")
 			.addDropdown((drop) =>
 				drop
+					.addOption("gpt-4o-transcribe", "gpt-4o-transcribe (default)")
 					.addOption("whisper-1", "whisper-1")
 					.setValue(this.plugin.settings.whisperModel)
 					.onChange(async (value) => {

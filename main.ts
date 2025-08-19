@@ -192,14 +192,31 @@ export default class VoiceNotesPlugin extends Plugin {
 			this.setStage("success");
 			this.deferIdle();
 		} catch (error) {
-			console.error("Voice Notes processing error", error);
-			new Notice("Voice Notes: Failed to process audio. See console.");
+			console.error("Voice Notes processing error:", error);
+			
+			// Provide more specific error messages
+			let errorMessage = "Voice Notes: Failed to process audio.";
+			if (error instanceof Error) {
+				if (error.message.includes("Whisper API error")) {
+					errorMessage = "Voice Notes: Transcription failed. Check your API key and internet connection.";
+				} else if (error.message.includes("Summarization API error")) {
+					errorMessage = "Voice Notes: Summarization failed. Check your API key and internet connection.";
+				} else if (error.message.includes("Note creation API error")) {
+					errorMessage = "Voice Notes: Note creation failed. Check your API key and internet connection.";
+				} else if (error.message.includes("Failed to fetch")) {
+					errorMessage = "Voice Notes: Network error. Check your internet connection.";
+				}
+			}
+			
+			new Notice(errorMessage);
 			this.setStage("error");
 			this.deferIdle();
 		}
 	}
 
 	private async transcribeWithWhisper(audioBlob: Blob): Promise<string> {
+		console.log("Starting transcription with model:", this.settings.whisperModel);
+		
 		const formData = new FormData();
 		const extension = this.detectAudioExtension(audioBlob.type);
 		try {
@@ -221,10 +238,12 @@ export default class VoiceNotesPlugin extends Plugin {
 
 		if (!response.ok) {
 			const errText = await response.text().catch(() => "");
-			throw new Error(`Whisper API error: ${response.status} ${response.statusText} ${errText}`);
+			console.error("Whisper API response error:", response.status, response.statusText, errText);
+			throw new Error(`Whisper API error: ${response.status} ${response.statusText} - ${errText}`);
 		}
 
 		const text = await response.text();
+		console.log("Transcription successful, length:", text.length);
 		return text;
 	}
 
@@ -261,6 +280,8 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	private async summarizeText(transcript: string): Promise<string> {
+		console.log("Starting summarization with model:", this.settings.summaryModel);
+		
 		const messages = [
 			{ role: "system", content: "Please summarize the following text into clear, concise bullet points.\nFormat the output as Markdown, with headers, subheaders, and bullet points where appropriate.\nAlways keep the output in the same language as the input." },
 			{ role: "user", content: transcript }
@@ -281,15 +302,19 @@ export default class VoiceNotesPlugin extends Plugin {
 
 		if (!response.ok) {
 			const errText = await response.text().catch(() => "");
-			throw new Error(`Summarization API error: ${response.status} ${response.statusText} ${errText}`);
+			console.error("Summarization API response error:", response.status, response.statusText, errText);
+			throw new Error(`Summarization API error: ${response.status} ${response.statusText} - ${errText}`);
 		}
 
 		const data = await response.json();
 		const content = data.choices?.[0]?.message?.content ?? "";
+		console.log("Summarization successful, length:", content.length);
 		return content;
 	}
 
 	private async createNoteFromSummary(summaryMarkdown: string): Promise<string> {
+		console.log("Starting note creation with model:", this.settings.noteModel);
+		
 		const messages = [
 			{ role: "system", content: "You are managing a personal knowledge vault.\nBased on the following summarized note, decide what this content represents:\n- If it contains tasks, represent them as Markdown checkboxes (- [ ]).\n- If it describes a project, group it under a project heading with clear steps.\n- If it is archival or reference information, structure it as a Markdown note with headers and subheaders.\n- If it is unordered or rambling, reorganize it into a logical, structured note.\n\nAlways decide whether this content should:\n1. Become a new note,\n2. Be added to an existing note,\n3. Or replace an existing note.\n\nSuggest appropriate tags and create Obsidian-style [[links]] to related concepts.\nAlways return the output in the same language as the input.\nReturn final content as clean Markdown, ready to be written to the vault." },
 			{ role: "user", content: summaryMarkdown }
@@ -310,11 +335,13 @@ export default class VoiceNotesPlugin extends Plugin {
 
 		if (!response.ok) {
 			const errText = await response.text().catch(() => "");
-			throw new Error(`Note creation API error: ${response.status} ${response.statusText} ${errText}`);
+			console.error("Note creation API response error:", response.status, response.statusText, errText);
+			throw new Error(`Note creation API error: ${response.status} ${response.statusText} - ${errText}`);
 		}
 
 		const data = await response.json();
 		const content = data.choices?.[0]?.message?.content ?? "";
+		console.log("Note creation successful, length:", content.length);
 		return content;
 	}
 
@@ -335,10 +362,13 @@ export default class VoiceNotesPlugin extends Plugin {
     // No local encryption helpers needed
 
 	private async saveMarkdownNote(content: string) {
+		console.log("Saving markdown note, content length:", content.length);
+		
 		const filename = this.generateNoteFilename();
 		const existing = this.app.vault.getAbstractFileByPath(filename);
 		if (!existing) {
 			await this.app.vault.create(filename, content);
+			console.log("Note saved successfully:", filename);
 			return;
 		}
 
@@ -347,6 +377,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			const alternate = filename.replace(/\.md$/, ` (${counter}).md`);
 			if (!this.app.vault.getAbstractFileByPath(alternate)) {
 				await this.app.vault.create(alternate, content);
+				console.log("Note saved successfully (with counter):", alternate);
 				return;
 			}
 			counter++;

@@ -44,3 +44,25 @@ If your plugin does not need CSS, delete this file.
 	75% { transform: translateX(-2px); }
 	100% { transform: translateX(0); }
 }
+
+/* Language selection UI */
+.languages-container {
+	max-height: 300px;
+	overflow-y: auto;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 6px;
+	padding: 8px;
+	margin-top: 8px;
+}
+
+.languages-container .setting-item {
+	margin-bottom: 4px;
+}
+
+.languages-container .setting-item:last-child {
+	margin-bottom: 0;
+}
+
+.languages-container .setting-item-name {
+	font-size: 0.9em;
+}

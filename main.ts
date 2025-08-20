@@ -5,13 +5,76 @@ interface VoiceNotesSettings {
 	whisperModel: string;
 	summaryModel: string;
 	noteModel: string;
+	transcriptionLanguages: string[];
 }
+
+// Supported languages for transcription models
+const SUPPORTED_LANGUAGES = [
+	{ code: "af", name: "Afrikaans" },
+	{ code: "ar", name: "Arabic" },
+	{ code: "az", name: "Azerbaijani" },
+	{ code: "bg", name: "Bulgarian" },
+	{ code: "bn", name: "Bengali" },
+	{ code: "ca", name: "Catalan" },
+	{ code: "cs", name: "Czech" },
+	{ code: "da", name: "Danish" },
+	{ code: "de", name: "German" },
+	{ code: "el", name: "Greek" },
+	{ code: "en", name: "English" },
+	{ code: "es", name: "Spanish" },
+	{ code: "et", name: "Estonian" },
+	{ code: "eu", name: "Basque" },
+	{ code: "fa", name: "Persian" },
+	{ code: "fi", name: "Finnish" },
+	{ code: "fr", name: "French" },
+	{ code: "ga", name: "Irish" },
+	{ code: "gl", name: "Galician" },
+	{ code: "he", name: "Hebrew" },
+	{ code: "hi", name: "Hindi" },
+	{ code: "hr", name: "Croatian" },
+	{ code: "hu", name: "Hungarian" },
+	{ code: "hy", name: "Armenian" },
+	{ code: "id", name: "Indonesian" },
+	{ code: "is", name: "Icelandic" },
+	{ code: "it", name: "Italian" },
+	{ code: "ja", name: "Japanese" },
+	{ code: "ka", name: "Georgian" },
+	{ code: "kk", name: "Kazakh" },
+	{ code: "ko", name: "Korean" },
+	{ code: "lt", name: "Lithuanian" },
+	{ code: "lv", name: "Latvian" },
+	{ code: "mk", name: "Macedonian" },
+	{ code: "mn", name: "Mongolian" },
+	{ code: "ms", name: "Malay" },
+	{ code: "mt", name: "Maltese" },
+	{ code: "nl", name: "Dutch" },
+	{ code: "no", name: "Norwegian" },
+	{ code: "pl", name: "Polish" },
+	{ code: "pt", name: "Portuguese" },
+	{ code: "ro", name: "Romanian" },
+	{ code: "ru", name: "Russian" },
+	{ code: "sk", name: "Slovak" },
+	{ code: "sl", name: "Slovenian" },
+	{ code: "sq", name: "Albanian" },
+	{ code: "sr", name: "Serbian" },
+	{ code: "sv", name: "Swedish" },
+	{ code: "sw", name: "Swahili" },
+	{ code: "ta", name: "Tamil" },
+	{ code: "th", name: "Thai" },
+	{ code: "tr", name: "Turkish" },
+	{ code: "uk", name: "Ukrainian" },
+	{ code: "ur", name: "Urdu" },
+	{ code: "uz", name: "Uzbek" },
+	{ code: "vi", name: "Vietnamese" },
+	{ code: "zh", name: "Chinese" }
+];
 
 const DEFAULT_SETTINGS: VoiceNotesSettings = {
 	apiKey: "",
 	whisperModel: "gpt-4o-transcribe",
 	summaryModel: "gpt-5-nano",
-	noteModel: "gpt-5"
+	noteModel: "gpt-5",
+	transcriptionLanguages: ["en"]
 };
 
 export default class VoiceNotesPlugin extends Plugin {
@@ -217,6 +280,39 @@ export default class VoiceNotesPlugin extends Plugin {
 	private async transcribeWithWhisper(audioBlob: Blob): Promise<string> {
 		console.log("Starting transcription with model:", this.settings.whisperModel);
 		
+		// If only one language is selected, force that language
+		if (this.settings.transcriptionLanguages.length === 1) {
+			return await this.transcribeWithLanguage(audioBlob, this.settings.transcriptionLanguages[0]);
+		}
+		
+		// Try auto-detection first
+		try {
+			const autoResult = await this.transcribeWithLanguage(audioBlob, "auto");
+			console.log("Auto-detection successful, length:", autoResult.length);
+			return autoResult;
+		} catch (error) {
+			console.log("Auto-detection failed, trying individual languages");
+		}
+		
+		// If auto-detection fails or detected language not in list, try each selected language
+		for (const language of this.settings.transcriptionLanguages) {
+			try {
+				new Notice(`Voice Notes: Retrying with ${language.toUpperCase()}...`);
+				const result = await this.transcribeWithLanguage(audioBlob, language);
+				if (result && result.trim()) {
+					console.log(`Transcription successful with ${language}, length:`, result.length);
+					return result;
+				}
+			} catch (error) {
+				console.log(`Transcription failed with ${language}:`, error);
+				continue;
+			}
+		}
+		
+		throw new Error("All transcription attempts failed");
+	}
+	
+	private async transcribeWithLanguage(audioBlob: Blob, language: string): Promise<string> {
 		const formData = new FormData();
 		const extension = this.detectAudioExtension(audioBlob.type);
 		try {
@@ -227,6 +323,11 @@ export default class VoiceNotesPlugin extends Plugin {
 		}
 		formData.append("model", this.settings.whisperModel || "gpt-4o-transcribe");
 		formData.append("response_format", "text");
+		
+		// Only add language parameter if not auto-detection
+		if (language !== "auto") {
+			formData.append("language", language);
+		}
 
 		const response = await this.fetchWithRetry("https://api.openai.com/v1/audio/transcriptions", {
 			method: "POST",
@@ -243,7 +344,6 @@ export default class VoiceNotesPlugin extends Plugin {
 		}
 
 		const text = await response.text();
-		console.log("Transcription successful, length:", text.length);
 		return text;
 	}
 
@@ -460,5 +560,35 @@ class VoiceNotesSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					})
 			);
+
+		// Transcription Languages section
+		containerEl.createEl("h3", { text: "Transcription Languages" });
+		containerEl.createEl("p", { 
+			text: "Select languages for transcription. If multiple are selected, auto-detection will be used first, then fallback to individual languages if needed.",
+			cls: "setting-item-description"
+		});
+		
+		const languagesContainer = containerEl.createDiv("languages-container");
+		
+		SUPPORTED_LANGUAGES.forEach((lang) => {
+			const setting = new Setting(languagesContainer)
+				.setName(lang.name)
+				.addToggle((toggle) => {
+					const isChecked = this.plugin.settings.transcriptionLanguages.includes(lang.code);
+					toggle.setValue(isChecked);
+					toggle.onChange(async (value) => {
+						if (value) {
+							if (!this.plugin.settings.transcriptionLanguages.includes(lang.code)) {
+								this.plugin.settings.transcriptionLanguages.push(lang.code);
+							}
+						} else {
+							this.plugin.settings.transcriptionLanguages = this.plugin.settings.transcriptionLanguages.filter(
+								(code) => code !== lang.code
+							);
+						}
+						await this.plugin.saveSettings();
+					});
+				});
+		});
 	}
 }

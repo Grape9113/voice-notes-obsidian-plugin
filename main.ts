@@ -414,8 +414,48 @@ export default class VoiceNotesPlugin extends Plugin {
 	private async createNoteFromSummary(summaryMarkdown: string): Promise<string> {
 		console.log("Starting note creation with model:", this.settings.noteModel);
 		
+		// Get vault context for intelligent note management
+		const vaultContext = await this.getVaultContext();
+		
 		const messages = [
-			{ role: "system", content: "You are managing a personal knowledge vault.\nBased on the following summarized note, decide what this content represents:\n- If it contains tasks, represent them as Markdown checkboxes (- [ ]).\n- If it describes a project, group it under a project heading with clear steps.\n- If it is archival or reference information, structure it as a Markdown note with headers and subheaders.\n- If it is unordered or rambling, reorganize it into a logical, structured note.\n\nAlways decide whether this content should:\n1. Become a new note,\n2. Be added to an existing note,\n3. Or replace an existing note.\n\nSuggest appropriate tags and create Obsidian-style [[links]] to related concepts.\nAlways return the output in the same language as the input.\nReturn final content as clean Markdown, ready to be written to the vault." },
+			{ 
+				role: "system", 
+				content: `You are managing a personal knowledge vault with contextual awareness. Your role is to:
+
+1. DECIDE NOTE STRATEGY:
+   - If this input updates an existing note (task completion, new detail, correction), modify the existing note
+   - If it belongs to an existing entity/topic, append to that note with structured content
+   - If it is truly new, create a new note
+   - AVOID creating duplicate notes
+
+2. TASK HANDLING (GTD Style):
+   - New tasks: - [ ] Task description
+   - Completed tasks: - [x] Task description (mark as done in existing note)
+   - Group related tasks under project headings
+
+3. LINKING STRATEGY:
+   - Only create [[links]] to entity notes that contain useful aggregated content
+   - If linking to an entity note that is empty, populate it with summaries/references
+   - Ensure links lead to valuable pages, not empty stubs
+
+4. STRUCTURE:
+   - Use headers for projects, sections for different content types
+   - Maintain chronological order for updates
+   - Include appropriate tags for organization
+
+VAULT CONTEXT (existing notes and entities):
+${vaultContext}
+
+Return your decision as JSON in this format:
+{
+  "action": "create|update|append",
+  "targetNote": "filename.md or null",
+  "content": "full markdown content",
+  "reasoning": "brief explanation of decision"
+}
+
+Always return the output in the same language as the input.`
+			},
 			{ role: "user", content: summaryMarkdown }
 		];
 
@@ -459,27 +499,134 @@ export default class VoiceNotesPlugin extends Plugin {
 
     // No local encryption helpers needed
 
-	private async saveMarkdownNote(content: string) {
+	private async saveMarkdownNote(content: string): Promise<void> {
 		console.log("Saving markdown note, content length:", content.length);
 		
-		const filename = this.generateNoteFilename();
-		const existing = this.app.vault.getAbstractFileByPath(filename);
-		if (!existing) {
-			await this.app.vault.create(filename, content);
-			console.log("Note saved successfully:", filename);
-			return;
-		}
-
-		let counter = 1;
-		while (true) {
-			const alternate = filename.replace(/\.md$/, ` (${counter}).md`);
-			if (!this.app.vault.getAbstractFileByPath(alternate)) {
-				await this.app.vault.create(alternate, content);
-				console.log("Note saved successfully (with counter):", alternate);
-				return;
+		try {
+			// Parse the AI response to determine action
+			const aiResponse = JSON.parse(content);
+			
+			if (aiResponse.action === "update" && aiResponse.targetNote) {
+				// Update existing note
+				await this.updateExistingNote(aiResponse.targetNote, aiResponse.content);
+				new Notice(`Voice Notes: Updated existing note: ${aiResponse.targetNote}`);
+			} else if (aiResponse.action === "append" && aiResponse.targetNote) {
+				// Append to existing note
+				await this.appendToExistingNote(aiResponse.targetNote, aiResponse.content);
+				new Notice(`Voice Notes: Appended to existing note: ${aiResponse.targetNote}`);
+			} else {
+				// Create new note
+				const filename = this.generateNoteFilename();
+				await this.app.vault.create(filename, aiResponse.content);
+				new Notice(`Voice Notes: Created new note: ${filename}`);
 			}
-			counter++;
+		} catch (error) {
+			console.error("Error parsing AI response or saving note:", error);
+			// Fallback to creating new note with original content
+			const filename = this.generateNoteFilename();
+			await this.app.vault.create(filename, content);
+			new Notice(`Voice Notes: Created new note (fallback): ${filename}`);
 		}
+	}
+	
+	private async updateExistingNote(filename: string, newContent: string): Promise<void> {
+		const existing = this.app.vault.getAbstractFileByPath(filename);
+		if (existing) {
+			await this.app.vault.modify(existing, newContent);
+		} else {
+			// If target note doesn't exist, create it
+			await this.app.vault.create(filename, newContent);
+		}
+	}
+	
+	private async appendToExistingNote(filename: string, contentToAppend: string): Promise<void> {
+		const existing = this.app.vault.getAbstractFileByPath(filename);
+		if (existing) {
+			const currentContent = await this.app.vault.read(existing);
+			const updatedContent = currentContent + "\n\n" + contentToAppend;
+			await this.app.vault.modify(existing, updatedContent);
+		} else {
+			// If target note doesn't exist, create it
+			await this.app.vault.create(filename, contentToAppend);
+		}
+	}
+	
+	private async getVaultContext(): Promise<string> {
+		try {
+			const allFiles = this.app.vault.getMarkdownFiles();
+			const recentFiles = allFiles
+				.sort((a, b) => b.stat.mtime - a.stat.mtime)
+				.slice(0, 10); // Get last 10 modified files
+			
+			let context = "Recent notes:\n";
+			
+			for (const file of recentFiles) {
+				try {
+					const content = await this.app.vault.read(file);
+					const title = file.basename;
+					const tags = this.extractTags(content);
+					const tasks = this.extractTasks(content);
+					const links = this.extractLinks(content);
+					
+					context += `- ${title}: tags=${tags.join(",")}, tasks=${tasks.length}, links=${links.join(",")}\n`;
+				} catch (error) {
+					console.log(`Could not read file ${file.path}:`, error);
+				}
+			}
+			
+			// Add entity summary
+			const entities = await this.extractEntities(allFiles);
+			if (entities.length > 0) {
+				context += "\nEntity notes:\n";
+				for (const entity of entities) {
+					context += `- ${entity.name}: ${entity.count} references\n`;
+				}
+			}
+			
+			return context;
+		} catch (error) {
+			console.error("Error getting vault context:", error);
+			return "Vault context unavailable";
+		}
+	}
+	
+	private extractTags(content: string): string[] {
+		const tagRegex = /#(\w+)/g;
+		const matches = content.match(tagRegex);
+		return matches ? matches.map(tag => tag.substring(1)) : [];
+	}
+	
+	private extractTasks(content: string): string[] {
+		const taskRegex = /- \[([ x])\] (.+)/g;
+		const matches = content.match(taskRegex);
+		return matches ? matches.map(task => task[2]) : [];
+	}
+	
+	private extractLinks(content: string): string[] {
+		const linkRegex = /\[\[([^\]]+)\]\]/g;
+		const matches = content.match(linkRegex);
+		return matches ? matches.map(link => link.substring(2, link.length - 2)) : [];
+	}
+	
+	private async extractEntities(files: any[]): Promise<Array<{name: string, count: number}>> {
+		const entityCounts = new Map<string, number>();
+		
+		for (const file of files) {
+			try {
+				const content = await this.app.vault.read(file);
+				const entities = this.extractLinks(content);
+				for (const entity of entities) {
+					entityCounts.set(entity, (entityCounts.get(entity) || 0) + 1);
+				}
+			} catch (error) {
+				// Skip files that can't be read
+			}
+		}
+		
+		return Array.from(entityCounts.entries())
+			.map(([name, count]) => ({ name, count }))
+			.sort((a, b) => b.count - a.count)
+			.slice(0, 5); // Top 5 entities
 	}
 
 	private generateNoteFilename(): string {

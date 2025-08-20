@@ -295,8 +295,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			},
 			body: JSON.stringify({
 				model: this.settings.summaryModel || "gpt-5-nano",
-				messages,
-				temperature: 0.2
+				messages
 			})
 		});
 
@@ -328,8 +327,7 @@ export default class VoiceNotesPlugin extends Plugin {
 			},
 			body: JSON.stringify({
 				model: this.settings.noteModel || "gpt-5",
-				messages,
-				temperature: 0.3
+				messages
 			})
 		});
 

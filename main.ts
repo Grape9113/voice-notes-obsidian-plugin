@@ -412,64 +412,50 @@ export default class VoiceNotesPlugin extends Plugin {
 	}
 
 	private async createNoteFromSummary(summaryMarkdown: string): Promise<string> {
-		console.log("Starting note creation with model:", this.settings.noteModel);
+		const startTime = Date.now();
+		const summaryTokens = Math.ceil(summaryMarkdown.length / 4); // Rough token estimate
+		console.log(`Starting note creation with model: ${this.settings.noteModel}, summary tokens: ~${summaryTokens}`);
 		
-		// Get vault context for intelligent note management
-		const vaultContext = await this.getVaultContext();
+		// Get compact vault context (5 candidate notes max)
+		const compactContext = await this.getCompactVaultContext();
+		const contextTokens = Math.ceil(compactContext.length / 4);
+		console.log(`Context tokens: ~${contextTokens}, total input: ~${summaryTokens + contextTokens}`);
+		
+		// Model selection: use mini for short summaries, full for complex content
+		const useMiniModel = summaryTokens < 400;
+		const selectedModel = useMiniModel ? "gpt-5-mini" : (this.settings.noteModel || "gpt-5");
+		console.log(`Selected model: ${selectedModel} (${useMiniModel ? 'mini for speed' : 'full for complexity'})`);
 		
 		const messages = [
 			{ 
 				role: "system", 
-				content: `You are managing a personal knowledge vault with contextual awareness. Your role is to:
-
-1. DECIDE NOTE STRATEGY:
-   - If this input updates an existing note (task completion, new detail, correction), modify the existing note
-   - If it belongs to an existing entity/topic, append to that note with structured content
-   - If it is truly new, create a new note
-   - AVOID creating duplicate notes
-
-2. TASK HANDLING (GTD Style):
-   - New tasks: - [ ] Task description
-   - Completed tasks: - [x] Task description (mark as done in existing note)
-   - Group related tasks under project headings
-
-3. LINKING STRATEGY:
-   - Only create [[links]] to entity notes that contain useful aggregated content
-   - If linking to an entity note that is empty, populate it with summaries/references
-   - Ensure links lead to valuable pages, not empty stubs
-
-4. STRUCTURE:
-   - Use headers for projects, sections for different content types
-   - Maintain chronological order for updates
-   - Include appropriate tags for organization
-
-VAULT CONTEXT (existing notes and entities):
-${vaultContext}
-
-Return your decision as JSON in this format:
-{
-  "action": "create|update|append",
-  "targetNote": "filename.md or null",
-  "content": "full markdown content",
-  "reasoning": "brief explanation of decision"
-}
-
-Always return the output in the same language as the input.`
+				content: "Return ONLY final Markdown in the same language. No explanations."
 			},
-			{ role: "user", content: summaryMarkdown }
+			{ 
+				role: "user", 
+				content: `Summary: ${summaryMarkdown}
+
+Rules: Tasks as - [ ] or - [x], projects with headers, reference info structured. No empty stub links. Decide: new note, append to existing, or replace existing.
+
+Context: ${compactContext}`
+			}
 		];
 
-		const response = await this.fetchWithRetry("https://api.openai.com/v1/chat/completions", {
+		// Optimized API call with timeout and retry
+		const response = await this.fetchWithTimeoutAndRetry("https://api.openai.com/v1/chat/completions", {
 			method: "POST",
 			headers: {
 				"Content-Type": "application/json",
 				Authorization: `Bearer ${this.settings.apiKey}`
 			},
 			body: JSON.stringify({
-				model: this.settings.noteModel || "gpt-5",
-				messages
+				model: selectedModel,
+				messages,
+				max_tokens: 1200,
+				temperature: 0.2,
+				n: 1
 			})
-		});
+		}, 45000); // 45s timeout
 
 		if (!response.ok) {
 			const errText = await response.text().catch(() => "");
@@ -479,10 +465,31 @@ Always return the output in the same language as the input.`
 
 		const data = await response.json();
 		const content = data.choices?.[0]?.message?.content ?? "";
-		console.log("Note creation successful, length:", content.length);
+		const totalTime = Date.now() - startTime;
+		console.log(`Note creation successful: ${content.length} chars, ${Math.ceil(content.length / 4)} tokens, ${totalTime}ms`);
 		return content;
 	}
 
+	// LATENCY OPTIMIZATION: Enhanced fetch with timeout and exponential backoff retry
+	private async fetchWithTimeoutAndRetry(input: RequestInfo, init: RequestInit, timeoutMs: number = 45000, retries: number = 1, backoffMs: number = 1000): Promise<Response> {
+		let attempt = 0;
+		while (true) {
+			try {
+				const controller = new AbortController();
+				const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+				
+				const response = await fetch(input, { ...init, signal: controller.signal });
+				clearTimeout(timeoutId);
+				return response;
+			} catch (err) {
+				if (attempt >= retries) throw err;
+				console.log(`Attempt ${attempt + 1} failed, retrying in ${backoffMs}ms...`);
+				await new Promise((r) => setTimeout(r, backoffMs * Math.pow(2, attempt)));
+				attempt++;
+			}
+		}
+	}
+	
 	private async fetchWithRetry(input: RequestInfo, init: RequestInit, retries: number = 2, backoffMs: number = 800): Promise<Response> {
 		let attempt = 0;
 		while (true) {
@@ -551,6 +558,36 @@ Always return the output in the same language as the input.`
 		}
 	}
 	
+	// LATENCY OPTIMIZATION: Compact context for note creation (5 notes max, 1-2 line summaries)
+	private async getCompactVaultContext(): Promise<string> {
+		try {
+			const allFiles = this.app.vault.getMarkdownFiles();
+			const recentFiles = allFiles
+				.sort((a, b) => b.stat.mtime - a.stat.mtime)
+				.slice(0, 5); // Reduced from 10 to 5 for speed
+			
+			let context = "Recent notes:\n";
+			
+			for (const file of recentFiles) {
+				try {
+					const content = await this.app.vault.read(file);
+					const title = file.basename;
+					// Extract only first line or first sentence for compact context
+					const firstLine = content.split('\n')[0].substring(0, 100);
+					context += `- ${title}: ${firstLine}...\n`;
+				} catch (error) {
+					console.log(`Could not read file ${file.path}:`, error);
+				}
+			}
+			
+			return context;
+		} catch (error) {
+			console.error("Error getting compact vault context:", error);
+			return "Context unavailable";
+		}
+	}
+	
+	// Original full context method kept for other uses
 	private async getVaultContext(): Promise<string> {
 		try {
 			const allFiles = this.app.vault.getMarkdownFiles();
